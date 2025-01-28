@@ -546,7 +546,9 @@ type ArgoCDRepoSpec struct {
 	// InitContainers defines the list of initialization containers for the repo server deployment
 	InitContainers []corev1.Container `json:"initContainers,omitempty"`
 
-	// SidecarContainers defines the list of sidecar containers for the repo server deployment
+	// SidecarContainers defines the list of sidecar containers for the repo
+	// server deployment. If the image field is omitted from a SidecarContainer,
+	// the image for the repo server will be used.
 	SidecarContainers []corev1.Container `json:"sidecarContainers,omitempty"`
 
 	// Enabled is the flag to enable Repo Server during ArgoCD installation. (optional, default `true`)
@@ -938,6 +940,15 @@ type ArgoCDSpec struct {
 	AggregatedClusterRoles bool `json:"aggregatedClusterRoles,omitempty"`
 }
 
+const (
+	ArgoCDConditionType = "Reconciled"
+)
+
+const (
+	ArgoCDConditionReasonSuccess       = "Success"
+	ArgoCDConditionReasonErrorOccurred = "ErrorOccurred"
+)
+
 // ArgoCDStatus defines the observed state of ArgoCD
 // +k8s:openapi-gen=true
 type ArgoCDStatus struct {
@@ -1021,6 +1032,9 @@ type ArgoCDStatus struct {
 
 	// Host is the hostname of the Ingress.
 	Host string `json:"host,omitempty"`
+
+	// Conditions is an array of the ArgoCD's status conditions
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // Banner defines an additional banner message to be displayed in Argo CD UI

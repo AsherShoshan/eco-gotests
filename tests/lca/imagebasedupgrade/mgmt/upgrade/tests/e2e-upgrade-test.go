@@ -39,6 +39,7 @@ import (
 	"github.com/openshift-kni/eco-gotests/tests/lca/imagebasedupgrade/mgmt/internal/mgmtparams"
 	"github.com/openshift-kni/eco-gotests/tests/lca/imagebasedupgrade/mgmt/upgrade/internal/tsparams"
 	"github.com/openshift-kni/eco-gotests/tests/lca/internal/brutil"
+	"github.com/openshift-kni/eco-gotests/tests/lca/internal/installconfig"
 	lcav1 "github.com/openshift-kni/lifecycle-agent/api/imagebasedupgrade/v1"
 	oplmV1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	kmmv1beta1 "github.com/rh-ecosystem-edge/kernel-module-management/api/v1beta1"
@@ -445,6 +446,46 @@ var _ = Describe(
 
 				}
 			})
+		})
+
+		It("includes specific NTP servers among sources", reportxml.ID("74409"), func() {
+			if MGMTConfig.AdditionalNTPSources == "" {
+				Skip("The value for additional NTP sources isn't set")
+			}
+
+			By("Validate the proper NTP servers are listed in the config", func() {
+				execCmd := "cat /etc/chrony.conf"
+				cmdOutput, err := cluster.ExecCmdWithStdout(APIClient, execCmd)
+				Expect(err).ToNot(HaveOccurred(), "could not execute command: %s", err)
+
+				for _, stdout := range cmdOutput {
+					for _, ntpSource := range strings.Split(MGMTConfig.AdditionalNTPSources, ",") {
+
+						Expect(strings.ReplaceAll(stdout, "\n", "")).To(ContainSubstring("server %s",
+							ntpSource),
+							"error: the expected NTP source %s wasn't found", ntpSource)
+					}
+
+				}
+			})
+		})
+
+		It("successfully configured using FIPs", reportxml.ID("71642"), func() {
+			if !MGMTConfig.SeedClusterInfo.HasFIPS {
+				Skip("Cluster not using FIPS enabled seed image")
+			}
+
+			By("Get cluster-config configmap")
+			clusterConifgMap, err := configmap.Pull(APIClient, "cluster-config-v1", "kube-system")
+			Expect(err).NotTo(HaveOccurred(), "error pulling cluster-config configmap from cluster")
+
+			installConfigData, ok := clusterConifgMap.Object.Data["install-config"]
+			Expect(ok).To(BeTrue(), "error: cluster-config does not contain appropriate install-config key")
+
+			installConfig, err := installconfig.NewInstallConfigFromString(installConfigData)
+			Expect(err).NotTo(HaveOccurred(), "error creating InstallConfig struct from configmap data")
+			Expect(installConfig.FIPS).To(BeTrue(),
+				"error: installed cluster does not have expected FIPS value set in install-config")
 		})
 	})
 

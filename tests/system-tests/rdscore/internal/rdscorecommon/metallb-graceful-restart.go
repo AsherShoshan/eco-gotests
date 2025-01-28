@@ -1,6 +1,7 @@
 package rdscorecommon
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -13,6 +14,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/openshift-kni/eco-goinfra/pkg/pod"
 	"github.com/openshift-kni/eco-goinfra/pkg/service"
@@ -85,7 +87,7 @@ func mTCPConnect(addr *net.TCPAddr, timeOut int) (*net.TCPConn, error) {
 //
 //nolint:funlen
 func verifySingleTCPConnection(loadBalancerIP string, servicePort int32,
-	finished, ready chan bool, stats *Counter) {
+	finished, ready, restartFRR chan bool, stats *Counter) {
 	var (
 		err      error
 		endPoint string
@@ -107,12 +109,35 @@ func verifySingleTCPConnection(loadBalancerIP string, servicePort int32,
 
 	getHTTPMsg := []byte(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", endPoint))
 
-	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Resolving TCP endpoint %q", endPoint)
+	var addr *net.TCPAddr
 
-	addr, err := net.ResolveTCPAddr("tcp", endPoint)
+	err = wait.PollUntilContextTimeout(context.TODO(), time.Second, time.Minute, true,
+		func(context.Context) (bool, error) {
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Resolving TCP endpoint %q", endPoint)
+
+			addr, err = net.ResolveTCPAddr("tcp", endPoint)
+
+			if err != nil {
+				glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed resolve TCP address %q : %v", endPoint, err)
+
+				return false, nil
+			}
+
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Successfully resolved TCP address %q", endPoint)
+
+			return true, nil
+		})
 
 	if err != nil {
 		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed resolve TCP address %q : %v", endPoint, err)
+
+		stats.CounterLock.Lock()
+		stats.Count++
+		stats.Failures = append(stats.Failures,
+			Event{Msg: fmt.Sprintf("Failed to resolve TCP address: %v", err), Timestamp: time.Now()})
+		stats.FailedWrite = append(stats.FailedWrite,
+			Event{Msg: fmt.Sprintf("Failed to resolve TCP address: %v", err), Timestamp: time.Now()})
+		stats.CounterLock.Unlock()
 
 		ready <- true
 
@@ -121,10 +146,33 @@ func verifySingleTCPConnection(loadBalancerIP string, servicePort int32,
 
 	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Dialing to the TCP endpoint %q", endPoint)
 
-	lbConnection, err := mTCPConnect(addr, int(1000))
+	var lbConnection *net.TCPConn
+
+	err = wait.PollUntilContextTimeout(context.TODO(), time.Second, time.Minute, true,
+		func(context.Context) (bool, error) {
+			lbConnection, err = mTCPConnect(addr, int(1000))
+
+			if err != nil {
+				glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed dailing to %q : %v", endPoint, err)
+
+				return false, nil
+			}
+
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Successfully dailed to %q", endPoint)
+
+			return true, nil
+		})
 
 	if err != nil {
 		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed dailing to %q : %v", endPoint, err)
+
+		stats.CounterLock.Lock()
+		stats.Count++
+		stats.Failures = append(stats.Failures,
+			Event{Msg: fmt.Sprintf("Failed to dial to address %q: %v", endPoint, err), Timestamp: time.Now()})
+		stats.FailedWrite = append(stats.FailedWrite,
+			Event{Msg: fmt.Sprintf("Failed to dial to address %q: %v", endPoint, err), Timestamp: time.Now()})
+		stats.CounterLock.Unlock()
 
 		ready <- true
 
@@ -146,6 +194,10 @@ func verifySingleTCPConnection(loadBalancerIP string, servicePort int32,
 
 	Expect(err).ToNot(HaveOccurred(),
 		fmt.Sprintf("failed to enable KeepAlivePeriod for the connection: %v", err))
+
+	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Restarting FRR pod")
+
+	restartFRR <- true
 
 	var stop bool
 
@@ -235,7 +287,7 @@ func verifySingleTCPConnection(loadBalancerIP string, servicePort int32,
 //
 //nolint:funlen
 func verifyMultipleTCPConnections(loadBalancerIP string, servicePort int32,
-	finished, ready chan bool, stats *Counter) {
+	finished, ready, restartFRR chan bool, stats *Counter) {
 	var (
 		err      error
 		endPoint string
@@ -257,12 +309,35 @@ func verifyMultipleTCPConnections(loadBalancerIP string, servicePort int32,
 
 	getHTTPMsg := []byte(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", endPoint))
 
-	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Resolving TCP endpoint %q", endPoint)
+	var addr *net.TCPAddr
 
-	addr, err := net.ResolveTCPAddr("tcp", endPoint)
+	err = wait.PollUntilContextTimeout(context.TODO(), time.Second, time.Minute, true,
+		func(context.Context) (bool, error) {
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Resolving TCP endpoint %q", endPoint)
+
+			addr, err = net.ResolveTCPAddr("tcp", endPoint)
+
+			if err != nil {
+				glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed resolve TCP address %q : %v", endPoint, err)
+
+				return false, nil
+			}
+
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Successfully resolved TCP address %q", endPoint)
+
+			return true, nil
+		})
 
 	if err != nil {
 		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed resolve TCP address %q : %v", endPoint, err)
+
+		stats.CounterLock.Lock()
+		stats.Count++
+		stats.Failures = append(stats.Failures,
+			Event{Msg: fmt.Sprintf("Failed to resolve TCP address %q : %v", endPoint, err), Timestamp: time.Now()})
+		stats.FailedDial = append(stats.FailedDial,
+			Event{Msg: fmt.Sprintf("Failed to resolve TCP address %q : %v", endPoint, err), Timestamp: time.Now()})
+		stats.CounterLock.Unlock()
 
 		ready <- true
 
@@ -270,6 +345,10 @@ func verifyMultipleTCPConnections(loadBalancerIP string, servicePort int32,
 	}
 
 	var stop bool
+
+	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Restarting FRR pod")
+
+	restartFRR <- true
 
 	for !stop {
 		select {
@@ -381,112 +460,166 @@ func verifyMultipleTCPConnections(loadBalancerIP string, servicePort int32,
 // restartMetallbFRRPod finds metallb-frr pod running on a node,
 // deletes it, and waits for a new pod to start and reach ready state.
 //
-//nolint:funlen
-func restartMetallbFRRPod(node string, metallbFRRRestartFailed *bool, finished chan bool) {
+//nolint:funlen,gocognit
+func restartMetallbFRRPod(node string, metallbFRRRestartFailed *bool, start, finished chan bool) {
 	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Looking for a metallb-frr pod on %q node", node)
 
-	mPodList, err := pod.List(APIClient, rdscoreparams.MetalLBOperatorNamespace,
-		metav1.ListOptions{LabelSelector: rdscoreparams.MetalLBFRRPodSelector})
+	var (
+		mPodList []*pod.Builder
+		err      error
+	)
 
-	if len(mPodList) == 0 {
-		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to found pod: %v", err)
+	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Wait for signal to restart FRR pod")
 
-		*metallbFRRRestartFailed = true
+	select {
+	case <-start:
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Received start signal. Restarting FRR pod now")
 
-		finished <- true
+		err = wait.PollUntilContextTimeout(context.TODO(), time.Second, time.Minute, true,
+			func(context.Context) (bool, error) {
+				mPodList, err = pod.List(APIClient, rdscoreparams.MetalLBOperatorNamespace,
+					metav1.ListOptions{LabelSelector: rdscoreparams.MetalLBFRRPodSelector})
 
-		return
-	}
+				if err != nil {
+					glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to list pods due to: %v", err)
 
-	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Filter pod running on %q", node)
+					return false, nil
+				}
 
-	var prevPod *pod.Builder
-
-	for _, _pod := range mPodList {
-		if _pod.Definition.Spec.NodeName == node {
-			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Found pod %q running on %q",
-				_pod.Definition.Name, node)
-
-			prevPod = _pod
-
-			break
-		}
-	}
-
-	if prevPod == nil {
-		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to found frr-k8s pod running on %q", node)
-
-		*metallbFRRRestartFailed = true
-
-		finished <- true
-
-		return
-	}
-
-	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Deleting pod %q", prevPod.Definition.Name)
-
-	prevPod, err = prevPod.DeleteAndWait(15 * time.Second)
-
-	if err != nil {
-		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to delete pod %q: %v",
-			prevPod.Definition.Name, err)
-
-		*metallbFRRRestartFailed = true
-
-		finished <- true
-
-		return
-	}
-
-	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Looking for a new metallb-frr pod")
-
-	var newPod *pod.Builder
-
-	for i := 0; i < 60; i++ {
-		mPodList, err = pod.List(APIClient, "metallb-system",
-			metav1.ListOptions{LabelSelector: "app=frr-k8s"})
+				return true, nil
+			})
 
 		if len(mPodList) == 0 {
-			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to found pod: %v", err)
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("0 pods found. Error: %v", err)
 
 			*metallbFRRRestartFailed = true
 
-			time.Sleep(1 * time.Second)
+			finished <- true
 
-			continue
+			return
 		}
+
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Filter pod running on %q", node)
+
+		var prevPod *pod.Builder
 
 		for _, _pod := range mPodList {
 			if _pod.Definition.Spec.NodeName == node {
-				glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Found pod running on %q", node)
+				glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Found pod %q running on %q",
+					_pod.Definition.Name, node)
 
-				newPod = _pod
+				prevPod = _pod
 
 				break
 			}
 		}
 
-		if newPod.Definition.Name == prevPod.Definition.Name {
-			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("No new frr-k8s pod found")
+		if prevPod == nil {
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to found frr-k8s pod running on %q", node)
 
 			*metallbFRRRestartFailed = true
-			newPod = nil
 
-			time.Sleep(1 * time.Second)
+			finished <- true
 
-			continue
-		} else {
-			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("\t\t---> New frr-k8s pod found: %q",
+			return
+		}
+
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Deleting pod %q", prevPod.Definition.Name)
+
+		prevPod, err = prevPod.DeleteAndWait(15 * time.Second)
+
+		if err != nil {
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to delete pod %q: %v",
+				prevPod.Definition.Name, err)
+
+			*metallbFRRRestartFailed = true
+
+			finished <- true
+
+			return
+		}
+
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Looking for a new metallb-frr pod")
+
+		var newPod *pod.Builder
+
+		err = wait.PollUntilContextTimeout(context.TODO(), 3*time.Second, 90*time.Second, true,
+			func(context.Context) (bool, error) {
+				mPodList, err = pod.List(APIClient, "metallb-system",
+					metav1.ListOptions{LabelSelector: "app=frr-k8s"})
+
+				if err != nil {
+					glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Failed to list pods due to %v", err)
+
+					return false, nil
+				}
+
+				if len(mPodList) == 0 {
+					glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Found 0 pods")
+
+					return false, nil
+				}
+
+				for _, _pod := range mPodList {
+					if _pod.Definition.Spec.NodeName == node {
+						glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Found pod running on %q", node)
+
+						newPod = _pod
+
+						break
+					}
+				}
+
+				if newPod == nil {
+					glog.V(rdscoreparams.RDSCoreLogLevel).Infof("No pod found running on %q", node)
+
+					newPod = nil
+
+					return false, nil
+				}
+
+				if newPod.Definition.Name == prevPod.Definition.Name {
+					glog.V(rdscoreparams.RDSCoreLogLevel).Infof("No new frr-k8s pod found")
+
+					newPod = nil
+
+					return false, nil
+				}
+
+				glog.V(rdscoreparams.RDSCoreLogLevel).Infof("\t\t---> New frr-k8s pod found: %q",
+					newPod.Definition.Name)
+
+				return true, nil
+			})
+
+		if err != nil || newPod == nil {
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("No new frr-k8s pod found on %q node", node)
+
+			*metallbFRRRestartFailed = true
+
+			finished <- true
+
+			return
+		}
+
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Waiting for pod %q to be Ready",
+			newPod.Definition.Name)
+
+		err = newPod.WaitUntilReady(3 * time.Minute)
+
+		if err != nil {
+			glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Pod %q hasn't reached Ready state",
 				newPod.Definition.Name)
 
-			*metallbFRRRestartFailed = false
-
-			break
+			*metallbFRRRestartFailed = true
 		}
-	}
 
-	if newPod == nil {
-		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("No new frr-k8s pod found on %q node", node)
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Goroutine restartMetallbFRRPod finished")
+
+		finished <- true
+	case <-time.After(10 * time.Minute):
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Hasn't received start signal for 10 minutes. Aborting")
+		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Goroutine restartMetallbFRRPod aborted")
 
 		*metallbFRRRestartFailed = true
 
@@ -494,22 +627,6 @@ func restartMetallbFRRPod(node string, metallbFRRRestartFailed *bool, finished c
 
 		return
 	}
-
-	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Waiting for pod %q to be Ready",
-		newPod.Definition.Name)
-
-	err = newPod.WaitUntilReady(3 * time.Minute)
-
-	if err != nil {
-		glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Pod %q hasn't reached Ready state",
-			newPod.Definition.Name)
-
-		*metallbFRRRestartFailed = true
-	}
-
-	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Goroutine restartMetallbFRRPod finished")
-
-	finished <- true
 }
 
 //nolint:funlen,gocognit
@@ -576,6 +693,7 @@ func verifyGracefulRestartFlow(svcName string, checkIPv6 bool, checkMultipleConn
 	glog.V(rdscoreparams.RDSCoreLogLevel).Infof("Will crash metallb-frr pod on %q node during a test", nodeName)
 
 	finished := make(chan bool)
+	start := make(chan bool)
 	ready := make(chan bool)
 
 	statistics := Counter{Start: time.Now()}
@@ -606,9 +724,9 @@ func verifyGracefulRestartFlow(svcName string, checkIPv6 bool, checkMultipleConn
 		Expect(err).ToNot(HaveOccurred(), "Failed to part service port")
 
 		if !checkMultipleConnections {
-			go verifySingleTCPConnection(loadBalancerIP, int32(normalizedPort), finished, ready, &statistics)
+			go verifySingleTCPConnection(loadBalancerIP, int32(normalizedPort), finished, ready, start, &statistics)
 		} else {
-			go verifyMultipleTCPConnections(loadBalancerIP, int32(normalizedPort), finished, ready, &statistics)
+			go verifyMultipleTCPConnections(loadBalancerIP, int32(normalizedPort), finished, ready, start, &statistics)
 		}
 	}
 
@@ -618,7 +736,7 @@ func verifyGracefulRestartFlow(svcName string, checkIPv6 bool, checkMultipleConn
 
 	var metallbFRRRestartFailed = false
 
-	go restartMetallbFRRPod(nodeName, &metallbFRRRestartFailed, finished)
+	go restartMetallbFRRPod(nodeName, &metallbFRRRestartFailed, start, finished)
 
 	// Wait for metallb-frr pod to be restarted.
 
