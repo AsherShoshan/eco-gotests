@@ -1,0 +1,14 @@
+name: Test ARC
+
+on: [workflow_dispatch]
+
+jobs:
+  test:
+    runs-on: arc-runner-set
+    steps:
+      - name: Check Installed Tools
+        run: |
+          oc version --client
+          helm version --client
+          jq --version
+          oc get pod
